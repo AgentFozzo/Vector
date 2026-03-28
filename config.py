@@ -19,6 +19,10 @@ class Config:
     UNRAID_USER = os.getenv("UNRAID_USER", "root")
     UNRAID_PASS = os.getenv("UNRAID_PASS", "")
 
+    # Home Assistant
+    HA_URL = os.getenv("HA_URL", "")
+    HA_TOKEN = os.getenv("HA_TOKEN", "")
+
     # GitHub auto-update
     GITHUB_REPO = os.getenv("GITHUB_REPO", "")
     GITHUB_SECRET = os.getenv("GITHUB_SECRET", "")

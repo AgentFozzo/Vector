@@ -10,6 +10,7 @@ from config import Config
 COG_CATEGORIES = {
     "Admin": ["help", "ping", "status", "reload", "shutdown"],
     "Monitoring": ["server", "disk", "docker", "temp"],
+    "Home": ["lights", "toggle", "on", "off", "brightness", "scene", "scenes", "ha"],
     "Scheduler": ["remindme", "announce", "reminders", "cancelreminder"],
     "Smart": ["ask"],
     "Updates": ["update", "version"],

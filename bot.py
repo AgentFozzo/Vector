@@ -34,6 +34,7 @@ INITIAL_COGS = [
     "cogs.scheduler",
     "cogs.smart",
     "cogs.updater",
+    "cogs.homeassistant",
 ]
 
 
