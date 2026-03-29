@@ -11,6 +11,7 @@ COG_CATEGORIES = {
     "Admin": ["help", "ping", "status", "reload", "shutdown"],
     "Monitoring": ["server", "disk", "docker", "temp"],
     "Home": ["lights", "toggle", "on", "off", "brightness", "scene", "scenes", "ha"],
+    "Shipping": ["shipcheck"],
     "Scheduler": ["remindme", "announce", "reminders", "cancelreminder"],
     "Smart": ["ask"],
     "Updates": ["update", "version"],

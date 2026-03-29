@@ -35,6 +35,7 @@ INITIAL_COGS = [
     "cogs.smart",
     "cogs.updater",
     "cogs.homeassistant",
+    "cogs.shipwatch",
 ]
 
 

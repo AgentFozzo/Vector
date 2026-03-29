@@ -19,6 +19,11 @@ class Config:
     UNRAID_USER = os.getenv("UNRAID_USER", "root")
     UNRAID_PASS = os.getenv("UNRAID_PASS", "")
 
+    # TCG Suite
+    TCG_SUITE_URL = os.getenv("TCG_SUITE_URL", "http://localhost:5000")
+    SHIP_NOTIFY_CHANNEL = os.getenv("SHIP_NOTIFY_CHANNEL", "")  # Discord channel ID for shipping alerts
+    SHIP_NOTIFY_HOUR = int(os.getenv("SHIP_NOTIFY_HOUR", "7"))  # Hour (24h) to send daily alerts
+
     # Home Assistant
     HA_URL = os.getenv("HA_URL", "")
     HA_TOKEN = os.getenv("HA_TOKEN", "")
