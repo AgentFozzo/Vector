@@ -187,19 +187,49 @@ class Updater(commands.Cog):
     # ── Update logic ──────────────────────────────────────────────────
 
     async def _do_update(self):
-        """Pull from git and reload all cogs."""
+        """Pull from git, reload existing cogs, load new cogs, and sync slash commands."""
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _git_pull)
         log.info(f"Git pull result: {result}")
 
         if "Already up to date" not in result:
-            # Reload all cogs
-            for ext in list(self.bot.extensions):
+            await self._reload_and_sync()
+
+    async def _reload_and_sync(self) -> list[str]:
+        """Reload all cogs, load any new ones from INITIAL_COGS, and sync slash commands."""
+        from bot import INITIAL_COGS
+
+        reloaded = []
+
+        # Reload existing extensions
+        for ext in list(self.bot.extensions):
+            try:
+                self.bot.reload_extension(ext)
+                reloaded.append(ext)
+                log.info(f"Reloaded: {ext}")
+            except Exception as e:
+                reloaded.append(f"{ext} (FAILED: {e})")
+                log.error(f"Failed to reload {ext}: {e}")
+
+        # Load any new cogs that aren't loaded yet
+        for ext in INITIAL_COGS:
+            if ext not in self.bot.extensions:
                 try:
-                    self.bot.reload_extension(ext)
-                    log.info(f"Reloaded: {ext}")
+                    self.bot.load_extension(ext)
+                    reloaded.append(f"{ext} (NEW)")
+                    log.info(f"Loaded new cog: {ext}")
                 except Exception as e:
-                    log.error(f"Failed to reload {ext}: {e}")
+                    reloaded.append(f"{ext} (FAILED: {e})")
+                    log.error(f"Failed to load new cog {ext}: {e}")
+
+        # Sync slash commands with Discord
+        try:
+            await self.bot.sync_all_application_commands()
+            log.info("Synced slash commands with Discord")
+        except Exception as e:
+            log.error(f"Failed to sync slash commands: {e}")
+
+        return reloaded
 
     # ── /update ───────────────────────────────────────────────────────
 
@@ -213,15 +243,9 @@ class Updater(commands.Cog):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _git_pull)
 
-        # Reload cogs
         reloaded = []
         if "Already up to date" not in result:
-            for ext in list(self.bot.extensions):
-                try:
-                    self.bot.reload_extension(ext)
-                    reloaded.append(ext)
-                except Exception as e:
-                    reloaded.append(f"{ext} (FAILED: {e})")
+            reloaded = await self._reload_and_sync()
 
         embed = nextcord.Embed(title="Update Result", color=0x57F287)
         embed.add_field(name="Git Pull", value=f"```\n{result[:500]}\n```", inline=False)
@@ -244,12 +268,7 @@ class Updater(commands.Cog):
 
             reloaded = []
             if "Already up to date" not in result:
-                for ext in list(self.bot.extensions):
-                    try:
-                        self.bot.reload_extension(ext)
-                        reloaded.append(ext)
-                    except Exception as e:
-                        reloaded.append(f"{ext} (FAILED: {e})")
+                reloaded = await self._reload_and_sync()
 
         msg = f"**Git Pull:**\n```\n{result[:500]}\n```"
         if reloaded:
