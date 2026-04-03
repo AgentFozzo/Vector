@@ -8,6 +8,7 @@ import re
 import random
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import nextcord
 from nextcord.ext import commands
@@ -225,7 +226,7 @@ INTENTS = [
 
 def _get_time_greeting() -> str:
     """Return appropriate greeting based on time of day."""
-    hour = datetime.now().hour
+    hour = datetime.now(ZoneInfo(Config.TIMEZONE)).hour
     if hour < 12:
         return "Good morning"
     elif hour < 17:
@@ -236,7 +237,7 @@ def _get_time_greeting() -> str:
 
 def _get_current_time() -> str:
     """Return formatted current time."""
-    return datetime.now().strftime("%A, %B %d at %I:%M %p")
+    return datetime.now(ZoneInfo(Config.TIMEZONE)).strftime("%A, %B %d at %I:%M %p")
 
 
 def match_intent(text: str) -> dict:

@@ -38,9 +38,9 @@ class HomeAssistant(commands.Cog):
             )
         return self._session
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if self._session and not self._session.closed:
-            asyncio.create_task(self._session.close())
+            await self._session.close()
 
     def _ha_configured(self) -> bool:
         return bool(self.base_url and self.token)
@@ -93,6 +93,50 @@ class HomeAssistant(commands.Cog):
         elif state == "unavailable":
             return "⚠️"
         return "🔵"
+
+    # ── Autocomplete helpers ────────────────────────────────────────────
+
+    async def _autocomplete_device(self, interaction: nextcord.Interaction, current: str):
+        """Autocomplete for light/switch device names."""
+        if not self._ha_configured():
+            return []
+        states = await self._api_get("states")
+        if not states:
+            return []
+
+        current_lower = current.lower()
+        choices = []
+        for entity in states:
+            eid = entity["entity_id"]
+            if not any(eid.startswith(f"{d}.") for d in ["light", "switch", "fan", "cover"]):
+                continue
+            friendly = entity.get("attributes", {}).get("friendly_name", eid)
+            if current_lower in friendly.lower() or current_lower in eid.lower():
+                choices.append(friendly[:100])
+            if len(choices) >= 25:
+                break
+        return choices
+
+    async def _autocomplete_scene(self, interaction: nextcord.Interaction, current: str):
+        """Autocomplete for scene names."""
+        if not self._ha_configured():
+            return []
+        states = await self._api_get("states")
+        if not states:
+            return []
+
+        current_lower = current.lower()
+        choices = []
+        for entity in states:
+            eid = entity["entity_id"]
+            if not eid.startswith("scene."):
+                continue
+            friendly = entity.get("attributes", {}).get("friendly_name", eid)
+            if current_lower in friendly.lower() or current_lower in eid.lower():
+                choices.append(friendly[:100])
+            if len(choices) >= 25:
+                break
+        return choices
 
     # ── /lights ───────────────────────────────────────────────────────
 
@@ -179,7 +223,7 @@ class HomeAssistant(commands.Cog):
         return False, f"Failed to toggle `{entity_id}`. Please verify the entity ID."
 
     @nextcord.slash_command(name="toggle", description="Toggle a light or switch on/off", guild_ids=Config.GUILD_IDS)
-    async def toggle_slash(self, interaction: nextcord.Interaction, device: str):
+    async def toggle_slash(self, interaction: nextcord.Interaction, device: str = nextcord.SlashOption(description="Device name", autocomplete=True)):
         if not self._ha_configured():
             await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
             return
@@ -191,6 +235,10 @@ class HomeAssistant(commands.Cog):
         color = 0x57F287 if success else 0xED4245
         embed = nextcord.Embed(description=msg, color=color)
         await interaction.followup.send(embed=embed)
+
+    @toggle_slash.on_autocomplete("device")
+    async def toggle_autocomplete(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_device(interaction, current)
 
     @commands.command(name="toggle")
     async def toggle_cmd(self, ctx, *, device: str):
@@ -223,7 +271,7 @@ class HomeAssistant(commands.Cog):
         return False, f"Unable to {action} `{entity_id}`. Please verify the entity ID."
 
     @nextcord.slash_command(name="on", description="Turn on a light or switch", guild_ids=Config.GUILD_IDS)
-    async def on_slash(self, interaction: nextcord.Interaction, device: str):
+    async def on_slash(self, interaction: nextcord.Interaction, device: str = nextcord.SlashOption(description="Device name", autocomplete=True)):
         if not self._ha_configured():
             await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
             return
@@ -233,6 +281,10 @@ class HomeAssistant(commands.Cog):
         color = 0x57F287 if success else 0xED4245
         embed = nextcord.Embed(description=msg, color=color)
         await interaction.followup.send(embed=embed)
+
+    @on_slash.on_autocomplete("device")
+    async def on_autocomplete(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_device(interaction, current)
 
     @commands.command(name="on")
     async def on_cmd(self, ctx, *, device: str):
@@ -246,7 +298,7 @@ class HomeAssistant(commands.Cog):
         await ctx.reply(embed=embed)
 
     @nextcord.slash_command(name="off", description="Turn off a light or switch", guild_ids=Config.GUILD_IDS)
-    async def off_slash(self, interaction: nextcord.Interaction, device: str):
+    async def off_slash(self, interaction: nextcord.Interaction, device: str = nextcord.SlashOption(description="Device name", autocomplete=True)):
         if not self._ha_configured():
             await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
             return
@@ -256,6 +308,10 @@ class HomeAssistant(commands.Cog):
         color = 0x57F287 if success else 0xED4245
         embed = nextcord.Embed(description=msg, color=color)
         await interaction.followup.send(embed=embed)
+
+    @off_slash.on_autocomplete("device")
+    async def off_autocomplete(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_device(interaction, current)
 
     @commands.command(name="off")
     async def off_cmd(self, ctx, *, device: str):
@@ -271,7 +327,7 @@ class HomeAssistant(commands.Cog):
     # ── /brightness ───────────────────────────────────────────────────
 
     @nextcord.slash_command(name="brightness", description="Set a light's brightness (0-100)", guild_ids=Config.GUILD_IDS)
-    async def brightness_slash(self, interaction: nextcord.Interaction, device: str, level: int):
+    async def brightness_slash(self, interaction: nextcord.Interaction, device: str = nextcord.SlashOption(description="Device name", autocomplete=True), level: int = nextcord.SlashOption(description="Brightness 0-100")):
         if not self._ha_configured():
             await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
             return
@@ -295,6 +351,10 @@ class HomeAssistant(commands.Cog):
                 color=0xED4245,
             )
         await interaction.followup.send(embed=embed)
+
+    @brightness_slash.on_autocomplete("device")
+    async def brightness_autocomplete(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_device(interaction, current)
 
     @commands.command(name="brightness")
     async def brightness_cmd(self, ctx, device: str, level: int):
@@ -356,7 +416,7 @@ class HomeAssistant(commands.Cog):
         await ctx.reply(embed=embed)
 
     @nextcord.slash_command(name="scene", description="Activate a scene", guild_ids=Config.GUILD_IDS)
-    async def scene_slash(self, interaction: nextcord.Interaction, name: str):
+    async def scene_slash(self, interaction: nextcord.Interaction, name: str = nextcord.SlashOption(description="Scene name", autocomplete=True)):
         if not self._ha_configured():
             await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
             return
@@ -378,6 +438,10 @@ class HomeAssistant(commands.Cog):
                 color=0xED4245,
             )
         await interaction.followup.send(embed=embed)
+
+    @scene_slash.on_autocomplete("name")
+    async def scene_autocomplete(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_scene(interaction, current)
 
     @commands.command(name="scene")
     async def scene_cmd(self, ctx, *, name: str):

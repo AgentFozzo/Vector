@@ -3,15 +3,37 @@ bot.py – Vector Bot entry point.
 Loads all cogs and starts the bot with both slash and prefix command support.
 """
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import nextcord
 from nextcord.ext import commands
 from config import Config
 
 # ── Logging ──────────────────────────────────────────────────────────
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+log_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+
+# Rotating file handler (5 MB per file, keep 5 backups)
+file_handler = RotatingFileHandler(
+    LOG_DIR / "vector.log",
+    maxBytes=5 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+file_handler.setFormatter(log_formatter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[console_handler, file_handler],
 )
 log = logging.getLogger("vector")
 

@@ -7,14 +7,15 @@ import nextcord
 from nextcord.ext import commands
 from config import Config
 
-COG_CATEGORIES = {
-    "Admin": ["help", "ping", "status", "reload", "shutdown"],
-    "Monitoring": ["server", "disk", "docker", "temp"],
-    "Home": ["lights", "toggle", "on", "off", "brightness", "scene", "scenes", "ha"],
-    "Shipping": ["shipcheck"],
-    "Scheduler": ["remindme", "announce", "reminders", "cancelreminder"],
-    "Smart": ["ask"],
-    "Updates": ["update", "version"],
+# Maps cog class names to user-friendly category names
+COG_DISPLAY_NAMES = {
+    "Admin": "Admin",
+    "Monitor": "Monitoring",
+    "HomeAssistant": "Home",
+    "ShipWatch": "Shipping",
+    "Scheduler": "Scheduler",
+    "Smart": "Smart",
+    "Updater": "Updates",
 }
 
 
@@ -28,18 +29,38 @@ class Admin(commands.Cog):
     def _is_admin(self, user_id: int) -> bool:
         return user_id in Config.OWNER_IDS
 
+    def _get_categories(self) -> dict[str, list[str]]:
+        """Dynamically build command categories from loaded cogs."""
+        categories: dict[str, list[str]] = {}
+        for cog_name, cog in self.bot.cogs.items():
+            display = COG_DISPLAY_NAMES.get(cog_name, cog_name)
+            cmds = []
+            # Prefix commands
+            for cmd in cog.get_commands():
+                cmds.append(cmd.name)
+            # Slash commands (nextcord application commands on the cog)
+            for attr_name in dir(cog):
+                attr = getattr(cog, attr_name, None)
+                if isinstance(attr, nextcord.SlashApplicationCommand):
+                    if attr.name not in cmds:
+                        cmds.append(attr.name)
+            if cmds:
+                categories[display] = sorted(set(cmds))
+        return dict(sorted(categories.items()))
+
     def _build_help_embed(self, category: str = None) -> nextcord.Embed:
         embed = nextcord.Embed(
             title="Vector Bot – Commands",
             color=0x5865F2,
         )
-        cats = COG_CATEGORIES
+        cats = self._get_categories()
         if category:
             key = category.title()
-            if key in cats:
-                cats = {key: cats[key]}
+            matched = {k: v for k, v in cats.items() if k.lower() == key.lower()}
+            if matched:
+                cats = matched
             else:
-                embed.description = f"Unknown category `{category}`. Available: {', '.join(COG_CATEGORIES.keys())}"
+                embed.description = f"Unknown category `{category}`. Available: {', '.join(cats.keys())}"
                 return embed
 
         for cat_name, cmds in cats.items():

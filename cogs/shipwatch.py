@@ -8,6 +8,7 @@ Fetches order data from the TCG Suite sync API (same server, port 5000).
 import logging
 import asyncio
 from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
 
 import nextcord
 from nextcord.ext import commands, tasks
@@ -21,6 +22,14 @@ except ImportError:
 log = logging.getLogger("vector.shipwatch")
 
 
+def _tz() -> ZoneInfo:
+    return ZoneInfo(Config.TIMEZONE)
+
+
+def _today() -> date:
+    return datetime.now(_tz()).date()
+
+
 class ShipWatch(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -28,10 +37,10 @@ class ShipWatch(commands.Cog):
         self._last_check_date = None  # Track so we only alert once per day
         self.daily_check.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.daily_check.cancel()
         if self._session and not self._session.closed:
-            asyncio.create_task(self._session.close())
+            await self._session.close()
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
@@ -74,7 +83,7 @@ class ShipWatch(commands.Cog):
         embed = nextcord.Embed(
             title="Shipping Alert",
             color=0xED4245 if overdue else 0xFEE75C,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(_tz()),
         )
         embed.set_footer(text="Vector Ship Watch")
 
@@ -126,7 +135,7 @@ class ShipWatch(commands.Cog):
 
     @tasks.loop(minutes=10)
     async def daily_check(self):
-        now = datetime.now()
+        now = datetime.now(_tz())
         today = now.date()
 
         # Only send once per day, at or after the configured hour
@@ -198,7 +207,7 @@ class ShipWatch(commands.Cog):
             await interaction.followup.send("No pending orders with ship-by dates. You're all caught up.")
             return
 
-        today = date.today()
+        today = _today()
         tomorrow = today + timedelta(days=1)
         overdue = []
         due_today = []
@@ -244,18 +253,28 @@ class ShipWatch(commands.Cog):
     @commands.command(name="shipcheck")
     async def shipcheck_cmd(self, ctx):
         """Prefix fallback for shipcheck."""
-        # Reuse the slash logic
         orders = await self._fetch_orders()
         if not orders:
             await ctx.reply("Unable to fetch orders from TCG Suite, or no orders found.")
             return
 
         pending = [o for o in orders if o.get("status") == "Pending" and o.get("shipByDate")]
-        today = date.today()
+        today = _today()
         tomorrow = today + timedelta(days=1)
-        overdue = [o for o in pending if o.get("shipByDate") and self._parse_date(o["shipByDate"]) and self._parse_date(o["shipByDate"]) < today]
-        due_today = [o for o in pending if o.get("shipByDate") and self._parse_date(o["shipByDate"]) == today]
-        due_tomorrow = [o for o in pending if o.get("shipByDate") and self._parse_date(o["shipByDate"]) == tomorrow]
+        overdue = []
+        due_today = []
+        due_tomorrow = []
+
+        for o in pending:
+            ship_date = self._parse_date(o["shipByDate"])
+            if not ship_date:
+                continue
+            if ship_date < today:
+                overdue.append(o)
+            elif ship_date == today:
+                due_today.append(o)
+            elif ship_date == tomorrow:
+                due_tomorrow.append(o)
 
         if not overdue and not due_today and not due_tomorrow:
             await ctx.reply("No upcoming shipments. You're all caught up.")

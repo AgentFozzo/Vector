@@ -4,6 +4,7 @@ Uses SSH to Unraid when configured, falls back to local psutil.
 """
 import logging
 import asyncio
+from pathlib import Path
 import nextcord
 from nextcord.ext import commands
 from config import Config
@@ -13,6 +14,9 @@ log = logging.getLogger("vector.monitor")
 # Lazy imports – only load if actually used
 _paramiko = None
 _psutil = None
+
+# SSH known hosts file – auto-created on first connection
+_KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
 
 
 def _get_paramiko():
@@ -35,7 +39,10 @@ def _ssh_exec(cmd: str) -> str:
     """Run a command on Unraid via SSH and return stdout."""
     paramiko = _get_paramiko()
     ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Load known hosts if available, then fall back to auto-add for first connection
+    if _KNOWN_HOSTS.exists():
+        ssh.load_host_keys(str(_KNOWN_HOSTS))
+    ssh.set_missing_host_key_policy(paramiko.WarningPolicy())
     try:
         ssh.connect(
             Config.UNRAID_HOST,
@@ -43,6 +50,9 @@ def _ssh_exec(cmd: str) -> str:
             password=Config.UNRAID_PASS,
             timeout=10,
         )
+        # Save host key for future verification
+        if _KNOWN_HOSTS.parent.exists():
+            ssh.save_host_keys(str(_KNOWN_HOSTS))
         _, stdout, stderr = ssh.exec_command(cmd, timeout=15)
         return stdout.read().decode().strip()
     finally:
@@ -63,7 +73,7 @@ class Monitor(commands.Cog):
         embed = nextcord.Embed(title="Server Stats", color=0x5865F2)
 
         if _ssh_available():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 cpu = await loop.run_in_executor(None, _ssh_exec, "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
                 mem = await loop.run_in_executor(None, _ssh_exec, "free -h | awk '/Mem:/{printf \"%s / %s (%.0f%%)\", $3, $2, $3/$2*100}'")
@@ -98,6 +108,7 @@ class Monitor(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @commands.command(name="server")
+    @commands.cooldown(1, 15, commands.BucketType.user)
     async def server_cmd(self, ctx):
         async with ctx.typing():
             embed = await self._get_server_embed()
@@ -109,7 +120,7 @@ class Monitor(commands.Cog):
         embed = nextcord.Embed(title="Disk Usage", color=0xFEE75C)
 
         if _ssh_available():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 raw = await loop.run_in_executor(
                     None, _ssh_exec,
@@ -162,6 +173,7 @@ class Monitor(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @commands.command(name="disk")
+    @commands.cooldown(1, 15, commands.BucketType.user)
     async def disk_cmd(self, ctx):
         async with ctx.typing():
             embed = await self._get_disk_embed()
@@ -173,7 +185,7 @@ class Monitor(commands.Cog):
         embed = nextcord.Embed(title="Docker Containers", color=0x2496ED)
 
         if _ssh_available():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 raw = await loop.run_in_executor(
                     None, _ssh_exec,
@@ -207,6 +219,7 @@ class Monitor(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @commands.command(name="docker")
+    @commands.cooldown(1, 15, commands.BucketType.user)
     async def docker_cmd(self, ctx):
         async with ctx.typing():
             embed = await self._get_docker_embed()
@@ -218,7 +231,7 @@ class Monitor(commands.Cog):
         embed = nextcord.Embed(title="Temperatures", color=0xED4245)
 
         if _ssh_available():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 # CPU temp
                 cpu_temp = await loop.run_in_executor(
@@ -261,6 +274,7 @@ class Monitor(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @commands.command(name="temp")
+    @commands.cooldown(1, 15, commands.BucketType.user)
     async def temp_cmd(self, ctx):
         async with ctx.typing():
             embed = await self._get_temp_embed()

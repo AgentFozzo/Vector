@@ -62,10 +62,10 @@ class Updater(commands.Cog):
             self.poll_updates.change_interval(minutes=Config.POLL_INTERVAL_MINS)
             self.poll_updates.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.poll_updates.cancel()
-        if self._webhook_site:
-            asyncio.create_task(self._webhook_site.cleanup())
+        if self._webhook_runner:
+            await self._webhook_runner.cleanup()
 
     async def cog_load(self):
         """Start the webhook server if configured."""
@@ -81,7 +81,7 @@ class Updater(commands.Cog):
 
             runner = web.AppRunner(app)
             await runner.setup()
-            site = web.TCPSite(runner, "0.0.0.0", Config.WEBHOOK_PORT)
+            site = web.TCPSite(runner, Config.WEBHOOK_HOST, Config.WEBHOOK_PORT)
             await site.start()
 
             self._webhook_runner = runner
@@ -121,7 +121,7 @@ class Updater(commands.Cog):
     async def poll_updates(self):
         """Check GitHub for new commits via git fetch."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # Fetch remote
             fetch_result = await loop.run_in_executor(
@@ -157,7 +157,7 @@ class Updater(commands.Cog):
 
     async def _do_update(self):
         """Pull from git and reload all cogs."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _git_pull)
         log.info(f"Git pull result: {result}")
 
@@ -179,7 +179,7 @@ class Updater(commands.Cog):
             return
 
         await interaction.response.defer()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _git_pull)
 
         # Reload cogs
@@ -208,7 +208,7 @@ class Updater(commands.Cog):
             return
 
         async with ctx.typing():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, _git_pull)
 
             reloaded = []

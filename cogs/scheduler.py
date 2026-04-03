@@ -2,13 +2,15 @@
 cogs/scheduler.py – Personal reminders and scheduled announcements.
 Persists to data/reminders.json so they survive restarts.
 Supports: 10m, 2h, 1d, 14:30 (next occurrence), tomorrow, etc.
+All times are timezone-aware using the configured TIMEZONE (default: America/Chicago).
 """
 import json
 import os
 import re
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import nextcord
@@ -23,6 +25,16 @@ REMINDERS_FILE = DATA_DIR / "reminders.json"
 # Time parsing patterns
 RELATIVE_RE = re.compile(r"^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$", re.IGNORECASE)
 CLOCK_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def _tz() -> ZoneInfo:
+    """Get the configured timezone."""
+    return ZoneInfo(Config.TIMEZONE)
+
+
+def _now() -> datetime:
+    """Get the current timezone-aware datetime."""
+    return datetime.now(_tz())
 
 
 def parse_time(time_str: str) -> timedelta | datetime | None:
@@ -47,7 +59,7 @@ def parse_time(time_str: str) -> timedelta | datetime | None:
     match = CLOCK_RE.match(time_str)
     if match:
         hour, minute = int(match.group(1)), int(match.group(2))
-        now = datetime.now()
+        now = _now()
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)  # Next occurrence
@@ -88,7 +100,7 @@ class Scheduler(commands.Cog):
 
     @tasks.loop(seconds=15)
     async def check_reminders(self):
-        now = datetime.now().timestamp()
+        now = _now().timestamp()
         due = [r for r in self.reminders if r["due"] <= now]
 
         for reminder in due:
@@ -121,7 +133,7 @@ class Scheduler(commands.Cog):
             return "Invalid time format. Use `10m`, `2h`, `1d`, `14:30`, etc."
 
         if isinstance(parsed, timedelta):
-            due = datetime.now() + parsed
+            due = _now() + parsed
         else:
             due = parsed
 
@@ -131,7 +143,7 @@ class Scheduler(commands.Cog):
             "message": message,
             "due": due.timestamp(),
             "type": "reminder",
-            "created": datetime.now().isoformat(),
+            "created": _now().isoformat(),
         })
         self._save_reminders()
 
@@ -159,7 +171,7 @@ class Scheduler(commands.Cog):
             return "Invalid time format. Use `10m`, `2h`, `1d`, `14:30`, etc."
 
         if isinstance(parsed, timedelta):
-            due = datetime.now() + parsed
+            due = _now() + parsed
         else:
             due = parsed
 
@@ -169,7 +181,7 @@ class Scheduler(commands.Cog):
             "message": message,
             "due": due.timestamp(),
             "type": "announce",
-            "created": datetime.now().isoformat(),
+            "created": _now().isoformat(),
         })
         self._save_reminders()
 
