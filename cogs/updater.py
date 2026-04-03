@@ -20,10 +20,24 @@ log = logging.getLogger("vector.updater")
 
 
 def _git_pull() -> str:
-    """Pull latest from origin. Returns stdout+stderr."""
+    """Fetch then pull latest from origin for the current branch. Returns stdout+stderr."""
     try:
+        # Get current branch name
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        branch = branch_result.stdout.strip() or "main"
+
+        # Fetch latest from origin
+        subprocess.run(
+            ["git", "fetch", "origin", branch],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        # Pull with explicit remote and branch
         result = subprocess.run(
-            ["git", "pull", "--ff-only"],
+            ["git", "pull", "--ff-only", "origin", branch],
             capture_output=True, text=True, timeout=30,
         )
         return (result.stdout + result.stderr).strip()
@@ -123,26 +137,43 @@ class Updater(commands.Cog):
         try:
             loop = asyncio.get_running_loop()
 
-            # Fetch remote
-            fetch_result = await loop.run_in_executor(
+            # Get current branch
+            branch_result = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["git", "fetch", "origin"],
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, timeout=5,
+                ),
+            )
+            branch = branch_result.stdout.strip() or "main"
+
+            # Fetch the specific branch from origin
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["git", "fetch", "origin", branch],
                     capture_output=True, text=True, timeout=30,
                 ),
             )
 
-            # Check if we're behind
-            status = await loop.run_in_executor(
+            # Compare local HEAD vs remote HEAD directly
+            local_sha = await loop.run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["git", "status", "-uno"],
-                    capture_output=True, text=True, timeout=10,
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True, text=True, timeout=5,
+                ),
+            )
+            remote_sha = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["git", "rev-parse", f"origin/{branch}"],
+                    capture_output=True, text=True, timeout=5,
                 ),
             )
 
-            if "behind" in status.stdout.lower():
-                log.info("New commits detected via polling – pulling...")
+            if local_sha.stdout.strip() != remote_sha.stdout.strip():
+                log.info(f"New commits detected on origin/{branch} – pulling...")
                 await self._do_update()
             else:
                 log.debug("Poll check: already up to date.")
