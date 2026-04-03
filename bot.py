@@ -67,7 +67,17 @@ INITIAL_COGS = [
 async def on_ready():
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     log.info(f"Connected to {len(bot.guilds)} guild(s)")
-    log.info(f"Slash commands registered for guild(s): {Config.GUILD_IDS}")
+    log.info(f"Loaded cogs: {list(bot.cogs.keys())}")
+    log.info(f"Loaded extensions: {list(bot.extensions.keys())}")
+    log.info(f"GUILD_IDS: {Config.GUILD_IDS}")
+
+    # Sync slash commands with Discord
+    try:
+        await bot.sync_all_application_commands()
+        log.info("Slash commands synced successfully")
+    except Exception as e:
+        log.error(f"Failed to sync slash commands: {e}")
+
     await bot.change_presence(
         activity=nextcord.Activity(type=nextcord.ActivityType.watching, name="the server")
     )
