@@ -58,6 +58,8 @@ INITIAL_COGS = [
     "cogs.updater",
     "cogs.homeassistant",
     "cogs.shipwatch",
+    "cogs.healthcheck",
+    "cogs.sshrun",
 ]
 
 

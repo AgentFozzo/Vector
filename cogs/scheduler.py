@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from typing import Optional
 
 import nextcord
 from nextcord.ext import commands, tasks
@@ -112,11 +113,17 @@ class Scheduler(commands.Cog):
                     else:
                         user = self.bot.get_user(reminder["user_id"])
                         mention = user.mention if user else f"<@{reminder['user_id']}>"
-                        await channel.send(f"⏰ {mention} Reminder: **{reminder['message']}**")
+                        prefix = "🔁" if reminder.get("type") == "recurring" else "⏰"
+                        await channel.send(f"{prefix} {mention} Reminder: **{reminder['message']}**")
             except Exception as e:
                 log.error(f"Failed to deliver reminder: {e}")
 
-            self.reminders.remove(reminder)
+            # Recurring reminders reschedule themselves; one-shots get removed
+            if reminder.get("type") == "recurring" and reminder.get("schedule"):
+                next_due = self._next_occurrence(reminder["schedule"])
+                reminder["due"] = next_due.timestamp()
+            else:
+                self.reminders.remove(reminder)
 
         if due:
             self._save_reminders()
@@ -209,11 +216,19 @@ class Scheduler(commands.Cog):
             return embed
 
         for i, r in enumerate(user_reminders, 1):
-            due = datetime.fromtimestamp(r["due"]).strftime("%b %d at %I:%M %p")
-            rtype = "📢" if r.get("type") == "announce" else "⏰"
+            due = datetime.fromtimestamp(r["due"], tz=_tz()).strftime("%b %d at %I:%M %p")
+            if r.get("type") == "announce":
+                rtype = "📢"
+            elif r.get("type") == "recurring":
+                rtype = "🔁"
+            else:
+                rtype = "⏰"
+            label = r["message"][:100]
+            if r.get("schedule_str"):
+                label += f"\n_({r['schedule_str']})_"
             embed.add_field(
                 name=f"#{i} {rtype} {due}",
-                value=r["message"][:100],
+                value=label,
                 inline=False,
             )
         return embed
@@ -248,6 +263,146 @@ class Scheduler(commands.Cog):
     @commands.command(name="cancelreminder")
     async def cancel_cmd(self, ctx, number: int):
         result = self._cancel_reminder(ctx.author.id, number)
+        await ctx.reply(result)
+
+    # ── /editreminder ─────────────────────────────────────────────────
+
+    def _edit_reminder(self, user_id: int, number: int, new_time: str) -> str:
+        user_reminders = [r for r in self.reminders if r["user_id"] == user_id]
+        if number < 1 or number > len(user_reminders):
+            return f"Invalid reminder number. You have {len(user_reminders)} reminder(s)."
+
+        parsed = parse_time(new_time)
+        if parsed is None:
+            return "Invalid time format. Use `10m`, `2h`, `1d`, `14:30`, etc."
+
+        if isinstance(parsed, timedelta):
+            due = _now() + parsed
+        else:
+            due = parsed
+
+        target = user_reminders[number - 1]
+        target["due"] = due.timestamp()
+        self._save_reminders()
+
+        due_str = due.strftime("%b %d at %I:%M %p")
+        return f"Reminder #{number} rescheduled to **{due_str}**: {target['message'][:50]}"
+
+    @nextcord.slash_command(name="editreminder", description="Reschedule a reminder by number", guild_ids=Config.GUILD_IDS)
+    async def editreminder_slash(self, interaction: nextcord.Interaction, number: int, new_time: str):
+        result = self._edit_reminder(interaction.user.id, number, new_time)
+        await interaction.response.send_message(result, ephemeral=True)
+
+    @commands.command(name="editreminder")
+    async def editreminder_cmd(self, ctx, number: int, new_time: str):
+        result = self._edit_reminder(ctx.author.id, number, new_time)
+        await ctx.reply(result)
+
+    # ── /recurring ────────────────────────────────────────────────────
+    # Simple recurring reminders: daily, weekly, weekdays, or specific day names.
+    # Stored alongside regular reminders with type="recurring" and a schedule field.
+
+    WEEKDAY_MAP = {
+        "monday": 0, "mon": 0,
+        "tuesday": 1, "tue": 1, "tues": 1,
+        "wednesday": 2, "wed": 2,
+        "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+        "friday": 4, "fri": 4,
+        "saturday": 5, "sat": 5,
+        "sunday": 6, "sun": 6,
+    }
+
+    def _parse_schedule(self, schedule_str: str) -> Optional[dict]:
+        """Parse a recurring schedule string.
+        Formats: 'daily 9:00', 'weekly monday 9:00', 'weekdays 8:30', 'friday 17:00'
+        Returns a dict with schedule info or None.
+        """
+        parts = schedule_str.lower().strip().split()
+        if len(parts) < 2:
+            return None
+
+        # Extract the time (last part should be HH:MM)
+        time_match = CLOCK_RE.match(parts[-1])
+        if not time_match:
+            return None
+        hour, minute = int(time_match.group(1)), int(time_match.group(2))
+
+        keyword = parts[0]
+
+        if keyword == "daily":
+            return {"type": "daily", "hour": hour, "minute": minute}
+        elif keyword == "weekdays":
+            return {"type": "weekdays", "hour": hour, "minute": minute}
+        elif keyword == "weekly" and len(parts) >= 3:
+            day = self.WEEKDAY_MAP.get(parts[1])
+            if day is None:
+                return None
+            return {"type": "weekly", "day": day, "hour": hour, "minute": minute}
+        elif keyword in self.WEEKDAY_MAP:
+            day = self.WEEKDAY_MAP[keyword]
+            return {"type": "weekly", "day": day, "hour": hour, "minute": minute}
+        return None
+
+    def _next_occurrence(self, schedule: dict) -> datetime:
+        """Calculate the next occurrence of a recurring schedule."""
+        now = _now()
+        target = now.replace(hour=schedule["hour"], minute=schedule["minute"], second=0, microsecond=0)
+
+        stype = schedule["type"]
+        if stype == "daily":
+            if target <= now:
+                target += timedelta(days=1)
+        elif stype == "weekdays":
+            if target <= now:
+                target += timedelta(days=1)
+            while target.weekday() >= 5:  # Skip weekends
+                target += timedelta(days=1)
+        elif stype == "weekly":
+            target_day = schedule["day"]
+            days_ahead = target_day - target.weekday()
+            if days_ahead < 0 or (days_ahead == 0 and target <= now):
+                days_ahead += 7
+            target += timedelta(days=days_ahead)
+
+        return target
+
+    def _create_recurring(self, user_id: int, channel_id: int, schedule_str: str, message: str) -> str:
+        schedule = self._parse_schedule(schedule_str)
+        if schedule is None:
+            return (
+                "Invalid schedule. Use:\n"
+                "• `daily 9:00` — every day at 9 AM\n"
+                "• `weekdays 8:30` — Monday–Friday at 8:30 AM\n"
+                "• `monday 14:00` — every Monday at 2 PM\n"
+                "• `weekly friday 17:00` — every Friday at 5 PM"
+            )
+
+        due = self._next_occurrence(schedule)
+
+        self.reminders.append({
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "message": message,
+            "due": due.timestamp(),
+            "type": "recurring",
+            "schedule": schedule,
+            "schedule_str": schedule_str,
+            "created": _now().isoformat(),
+        })
+        self._save_reminders()
+
+        due_str = due.strftime("%A, %b %d at %I:%M %p")
+        return f"Recurring reminder set (**{schedule_str}**). Next: **{due_str}**\nMessage: {message}"
+
+    @nextcord.slash_command(name="recurring", description="Set a recurring reminder (daily, weekdays, weekly)", guild_ids=Config.GUILD_IDS)
+    async def recurring_slash(self, interaction: nextcord.Interaction, schedule: str = nextcord.SlashOption(description="e.g. 'daily 9:00' or 'monday 14:00'"), message: str = nextcord.SlashOption(description="Reminder message")):
+        result = self._create_recurring(interaction.user.id, interaction.channel_id, schedule, message)
+        await interaction.response.send_message(result, ephemeral=True)
+
+    @commands.command(name="recurring")
+    async def recurring_cmd(self, ctx, schedule: str, *, message: str):
+        """Set a recurring reminder. Schedule in quotes: !recurring "daily 9:00" Check inventory"""
+        result = self._create_recurring(ctx.author.id, ctx.channel.id, schedule, message)
         await ctx.reply(result)
 
 

@@ -16,6 +16,8 @@ COG_DISPLAY_NAMES = {
     "Scheduler": "Scheduler",
     "Smart": "Smart",
     "Updater": "Updates",
+    "HealthCheck": "Health",
+    "SSHRun": "SSH",
 }
 
 

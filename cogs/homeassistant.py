@@ -506,6 +506,147 @@ class HomeAssistant(commands.Cog):
         else:
             await ctx.reply(f"🔴 Unable to connect to Home Assistant at `{self.base_url}`")
 
+    # ── /weather ──────────────────────────────────────────────────────
+
+    async def _build_weather_embed(self) -> nextcord.Embed:
+        """Build weather embed from Home Assistant weather entities."""
+        weather_entities = await self._get_entities("weather")
+        if not weather_entities:
+            embed = nextcord.Embed(
+                title="Weather",
+                description="No weather entities found in Home Assistant. Add a weather integration first.",
+                color=0xED4245,
+            )
+            return embed
+
+        # Use the first weather entity
+        entity = weather_entities[0]
+        attrs = entity.get("attributes", {})
+        state = entity.get("state", "unknown")
+        friendly = self._friendly_name(entity)
+
+        embed = nextcord.Embed(title=f"Weather — {friendly}", color=0x3498DB)
+
+        # Current conditions
+        temp = attrs.get("temperature")
+        temp_unit = attrs.get("temperature_unit", "°F")
+        humidity = attrs.get("humidity")
+        wind_speed = attrs.get("wind_speed")
+        wind_unit = attrs.get("wind_speed_unit", "mph")
+        pressure = attrs.get("pressure")
+        pressure_unit = attrs.get("pressure_unit", "hPa")
+
+        conditions = f"**{state.replace('_', ' ').title()}**"
+        if temp is not None:
+            conditions += f"\nTemperature: **{temp}{temp_unit}**"
+        if humidity is not None:
+            conditions += f"\nHumidity: **{humidity}%**"
+        if wind_speed is not None:
+            conditions += f"\nWind: **{wind_speed} {wind_unit}**"
+        if pressure is not None:
+            conditions += f"\nPressure: **{pressure} {pressure_unit}**"
+
+        embed.add_field(name="Current", value=conditions, inline=False)
+
+        # Forecast (if available)
+        forecast = attrs.get("forecast", [])
+        if forecast:
+            forecast_lines = []
+            for day in forecast[:5]:
+                dt = day.get("datetime", "")[:10]
+                cond = day.get("condition", "").replace("_", " ").title()
+                high = day.get("temperature")
+                low = day.get("templow")
+                if high is not None and low is not None:
+                    forecast_lines.append(f"**{dt}** — {cond}, {low}{temp_unit} / {high}{temp_unit}")
+                elif high is not None:
+                    forecast_lines.append(f"**{dt}** — {cond}, {high}{temp_unit}")
+                else:
+                    forecast_lines.append(f"**{dt}** — {cond}")
+
+            if forecast_lines:
+                embed.add_field(name="Forecast", value="\n".join(forecast_lines), inline=False)
+
+        embed.set_footer(text=f"Via Home Assistant — {entity['entity_id']}")
+        return embed
+
+    @nextcord.slash_command(name="weather", description="Current weather and forecast", guild_ids=Config.GUILD_IDS)
+    async def weather_slash(self, interaction: nextcord.Interaction):
+        if not self._ha_configured():
+            await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        embed = await self._build_weather_embed()
+        await interaction.followup.send(embed=embed)
+
+    @commands.command(name="weather")
+    async def weather_cmd(self, ctx):
+        if not self._ha_configured():
+            await ctx.reply("Home Assistant is not configured.")
+            return
+        async with ctx.typing():
+            embed = await self._build_weather_embed()
+        await ctx.reply(embed=embed)
+
+    # ── /notify ──────────────────────────────────────────────────────
+
+    @nextcord.slash_command(name="notify", description="Send a push notification via Home Assistant", guild_ids=Config.GUILD_IDS)
+    async def notify_slash(self, interaction: nextcord.Interaction, message: str, target: str = nextcord.SlashOption(description="Notify service target (e.g. mobile_app_phone)", required=False, default=None)):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        if not self._ha_configured():
+            await interaction.response.send_message("Home Assistant is not configured.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        success, msg = await self._send_notification(message, target)
+        color = 0x57F287 if success else 0xED4245
+        embed = nextcord.Embed(description=msg, color=color)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @commands.command(name="notify")
+    async def notify_cmd(self, ctx, *, message: str):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        if not self._ha_configured():
+            await ctx.reply("Home Assistant is not configured.")
+            return
+        async with ctx.typing():
+            success, msg = await self._send_notification(message)
+        color = 0x57F287 if success else 0xED4245
+        embed = nextcord.Embed(description=msg, color=color)
+        await ctx.reply(embed=embed)
+
+    async def _send_notification(self, message: str, target: str = None) -> tuple[bool, str]:
+        """Send a notification via HA's notify service."""
+        # If no target, try to find available notify services
+        if target:
+            service = f"notify/{target}"
+        else:
+            # Try the default notify service
+            service = "notify/notify"
+
+        result = await self._api_post(
+            f"services/{service}",
+            {"message": message, "title": "Vector Bot"},
+        )
+        if result is not None:
+            return True, f"Notification sent: **{message[:100]}**"
+
+        # If default failed and no target specified, list available services
+        if not target:
+            services = await self._api_get("services")
+            if services:
+                notify_services = []
+                for svc in services:
+                    if svc.get("domain") == "notify":
+                        for s_name in svc.get("services", {}).keys():
+                            notify_services.append(f"`{s_name}`")
+                if notify_services:
+                    return False, f"Default notify failed. Available targets: {', '.join(notify_services)}\nUse `/notify <message> <target>`."
+        return False, f"Unable to send notification via `{service}`. Check your HA notify configuration."
+
     # ── Entity resolution (fuzzy match by friendly name) ──────────────
 
     async def _resolve_entity(self, query: str, domain: str = None) -> str:

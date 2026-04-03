@@ -280,6 +280,250 @@ class Monitor(commands.Cog):
             embed = await self._get_temp_embed()
         await ctx.reply(embed=embed)
 
+    # ── Docker container autocomplete ─────────────────────────────────
+
+    async def _autocomplete_container(self, interaction: nextcord.Interaction, current: str):
+        """Autocomplete for Docker container names via SSH."""
+        if not _ssh_available():
+            return []
+        try:
+            loop = asyncio.get_running_loop()
+            raw = await loop.run_in_executor(
+                None, _ssh_exec,
+                "docker ps -a --format '{{.Names}}' | sort"
+            )
+            if not raw:
+                return []
+            current_lower = current.lower()
+            names = [n.strip() for n in raw.strip().split("\n") if n.strip()]
+            return [n for n in names if current_lower in n.lower()][:25]
+        except Exception:
+            return []
+
+    # ── /dockerrestart ────────────────────────────────────────────────
+
+    async def _docker_action(self, container: str, action: str) -> tuple[bool, str]:
+        """Run a docker action (start/stop/restart) on a container."""
+        if not _ssh_available():
+            return False, "Docker control requires Unraid SSH to be configured."
+
+        allowed = {"start", "stop", "restart"}
+        if action not in allowed:
+            return False, f"Invalid action. Use: {', '.join(allowed)}"
+
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None, _ssh_exec,
+                f"docker {action} {container} 2>&1"
+            )
+            # Verify new status
+            status = await loop.run_in_executor(
+                None, _ssh_exec,
+                f"docker inspect -f '{{{{.State.Status}}}}' {container} 2>&1"
+            )
+            icon = "🟢" if status == "running" else "🔴" if status in ("exited", "stopped") else "🟡"
+            return True, f"{icon} **{container}** — `docker {action}` complete. Status: **{status}**"
+        except Exception as e:
+            return False, f"Failed to {action} `{container}`: {e}"
+
+    @nextcord.slash_command(name="dockerrestart", description="Restart a Docker container", guild_ids=Config.GUILD_IDS)
+    async def dockerrestart_slash(self, interaction: nextcord.Interaction, container: str = nextcord.SlashOption(description="Container name", autocomplete=True)):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        success, msg = await self._docker_action(container, "restart")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await interaction.followup.send(embed=embed)
+
+    @dockerrestart_slash.on_autocomplete("container")
+    async def dockerrestart_ac(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_container(interaction, current)
+
+    @commands.command(name="dockerrestart")
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def dockerrestart_cmd(self, ctx, *, container: str):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        async with ctx.typing():
+            success, msg = await self._docker_action(container, "restart")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await ctx.reply(embed=embed)
+
+    # ── /dockerstop ───────────────────────────────────────────────────
+
+    @nextcord.slash_command(name="dockerstop", description="Stop a Docker container", guild_ids=Config.GUILD_IDS)
+    async def dockerstop_slash(self, interaction: nextcord.Interaction, container: str = nextcord.SlashOption(description="Container name", autocomplete=True)):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        success, msg = await self._docker_action(container, "stop")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await interaction.followup.send(embed=embed)
+
+    @dockerstop_slash.on_autocomplete("container")
+    async def dockerstop_ac(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_container(interaction, current)
+
+    @commands.command(name="dockerstop")
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def dockerstop_cmd(self, ctx, *, container: str):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        async with ctx.typing():
+            success, msg = await self._docker_action(container, "stop")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await ctx.reply(embed=embed)
+
+    # ── /dockerstart ──────────────────────────────────────────────────
+
+    @nextcord.slash_command(name="dockerstart", description="Start a Docker container", guild_ids=Config.GUILD_IDS)
+    async def dockerstart_slash(self, interaction: nextcord.Interaction, container: str = nextcord.SlashOption(description="Container name", autocomplete=True)):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        success, msg = await self._docker_action(container, "start")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await interaction.followup.send(embed=embed)
+
+    @dockerstart_slash.on_autocomplete("container")
+    async def dockerstart_ac(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_container(interaction, current)
+
+    @commands.command(name="dockerstart")
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def dockerstart_cmd(self, ctx, *, container: str):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        async with ctx.typing():
+            success, msg = await self._docker_action(container, "start")
+        embed = nextcord.Embed(description=msg, color=0x57F287 if success else 0xED4245)
+        await ctx.reply(embed=embed)
+
+    # ── /logs ─────────────────────────────────────────────────────────
+
+    @nextcord.slash_command(name="logs", description="Tail Docker container logs", guild_ids=Config.GUILD_IDS)
+    async def logs_slash(self, interaction: nextcord.Interaction, container: str = nextcord.SlashOption(description="Container name", autocomplete=True), lines: int = nextcord.SlashOption(description="Number of lines (default 20)", required=False, default=20)):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer()
+
+        lines = max(1, min(lines, 50))
+        result = await self._get_container_logs(container, lines)
+        await interaction.followup.send(result)
+
+    @logs_slash.on_autocomplete("container")
+    async def logs_ac(self, interaction: nextcord.Interaction, current: str):
+        return await self._autocomplete_container(interaction, current)
+
+    @commands.command(name="logs")
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def logs_cmd(self, ctx, container: str, lines: int = 20):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        lines = max(1, min(lines, 50))
+        async with ctx.typing():
+            result = await self._get_container_logs(container, lines)
+        await ctx.reply(result)
+
+    async def _get_container_logs(self, container: str, lines: int) -> str:
+        if not _ssh_available():
+            return "Docker logs require Unraid SSH to be configured."
+
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await loop.run_in_executor(
+                None, _ssh_exec,
+                f"docker logs --tail {lines} {container} 2>&1"
+            )
+            if not raw:
+                return f"No log output from `{container}`."
+            # Truncate to fit Discord's 2000-char limit
+            truncated = raw[:1900]
+            if len(raw) > 1900:
+                truncated += "\n... (truncated)"
+            return f"**{container}** — last {lines} lines:\n```\n{truncated}\n```"
+        except Exception as e:
+            return f"Failed to get logs for `{container}`: {e}"
+
+    # ── /speedtest ────────────────────────────────────────────────────
+
+    @nextcord.slash_command(name="speedtest", description="Run a network speed test on the server", guild_ids=Config.GUILD_IDS)
+    async def speedtest_slash(self, interaction: nextcord.Interaction):
+        if interaction.user.id not in Config.OWNER_IDS:
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        embed = await self._run_speedtest()
+        await interaction.followup.send(embed=embed)
+
+    @commands.command(name="speedtest")
+    @commands.cooldown(1, 60, commands.BucketType.guild)
+    async def speedtest_cmd(self, ctx):
+        if ctx.author.id not in Config.OWNER_IDS:
+            await ctx.reply("Admin only.")
+            return
+        async with ctx.typing():
+            embed = await self._run_speedtest()
+        await ctx.reply(embed=embed)
+
+    async def _run_speedtest(self) -> nextcord.Embed:
+        embed = nextcord.Embed(title="Speed Test", color=0x5865F2)
+
+        if _ssh_available():
+            loop = asyncio.get_running_loop()
+            try:
+                raw = await loop.run_in_executor(
+                    None, _ssh_exec,
+                    "speedtest-cli --simple 2>&1 || echo 'speedtest-cli not installed'"
+                )
+                if "not installed" in raw or "not found" in raw:
+                    embed.description = "speedtest-cli is not installed on the server.\nInstall with: `pip install speedtest-cli`"
+                    embed.color = 0xED4245
+                else:
+                    for line in raw.strip().split("\n"):
+                        if ":" in line:
+                            key, val = line.split(":", 1)
+                            embed.add_field(name=key.strip(), value=f"`{val.strip()}`", inline=True)
+                embed.set_footer(text=f"Via SSH to {Config.UNRAID_HOST}")
+            except Exception as e:
+                embed.description = f"SSH error: {e}"
+                embed.color = 0xED4245
+        else:
+            try:
+                import subprocess
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        ["speedtest-cli", "--simple"],
+                        capture_output=True, text=True, timeout=60,
+                    ),
+                )
+                raw = (result.stdout + result.stderr).strip()
+                if result.returncode != 0 or "not found" in raw:
+                    embed.description = "speedtest-cli is not installed.\nInstall with: `pip install speedtest-cli`"
+                    embed.color = 0xED4245
+                else:
+                    for line in raw.strip().split("\n"):
+                        if ":" in line:
+                            key, val = line.split(":", 1)
+                            embed.add_field(name=key.strip(), value=f"`{val.strip()}`", inline=True)
+                embed.set_footer(text="Local speedtest")
+            except Exception as e:
+                embed.description = f"Error: {e}"
+                embed.color = 0xED4245
+
+        return embed
+
 
 def setup(bot):
     bot.add_cog(Monitor(bot))
